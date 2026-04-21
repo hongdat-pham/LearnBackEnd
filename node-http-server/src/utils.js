@@ -13,3 +13,9 @@ export async function parseBody(req) {
     });
   });
 }
+// ── Helper gửi JSON response — dùng ở mọi chỗ ──────────
+
+export const sendJSON = (res, statusCode, data) => {
+  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+};

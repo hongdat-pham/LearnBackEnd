@@ -1,73 +1,56 @@
 import http from "http";
-import { parseBody } from "./utils.js";
+import { parseBody, sendJSON } from "./utils.js";
+import { readData, writeData } from "./db.js";
 
 const server = http.createServer(async (req, res) => {
-  const { method, url } = req; // Destructure cho gọn
+  const { method, url } = req;
 
-  // Route: GET /
+  // ── GET / ────────────────────────────────────────────
   if (method === "GET" && url === "/") {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Hello World");
 
-    // Route: GET /health
+    // ── GET /health ──────────────────────────────────────
   } else if (method === "GET" && url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok" })); // Object → JSON string
+    sendJSON(res, 200, { status: "ok" });
 
-    // Tất cả route khác → 404
+    // ── GET /about ───────────────────────────────────────
   } else if (method === "GET" && url === "/about") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        name: "Hong Dat",
-        role: "Backend Dev",
-        currentDate: new Date().toISOString().split("T")[0],
-      }),
-    );
+    sendJSON(res, 200, {
+      name: "Hong Dat",
+      role: "Backend Dev",
+      currentDate: new Date().toISOString().split("T")[0],
+    });
+
+    // ── POST /echo ───────────────────────────────────────
   } else if (method === "POST" && url === "/echo") {
     try {
-      const data = await parseBody(req); // Gom chunks + parse
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(data)); // Trả lại nguyên xi
-    } catch (err) {
-      // parseBody reject → JSON lỗi
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid JSON" }));
+      const data = await parseBody(req);
+      sendJSON(res, 200, data);
+    } catch {
+      sendJSON(res, 400, { error: "Invalid JSON" });
     }
-    // Route: POST /users — nhận { name, email }, validate rồi trả về
+
+    // ── POST /users ──────────────────────────────────────
   } else if (method === "POST" && url === "/users") {
     try {
-      const data = await parseBody(req);
-      const { name, email } = data;
-
-      // Validate — thiếu field nào thì báo lỗi ngay
+      const { name, email } = await parseBody(req);
       if (!name || !email) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "name and email required" }));
-        return; // Dừng lại, không chạy tiếp
+        return sendJSON(res, 400, { error: "name and email required" });
       }
-
-      // Đủ data → trả về user
-      res.writeHead(201, { "Content-Type": "application/json" }); // 201 = Created
-      res.end(JSON.stringify({ id: 1, name, email }));
-    } catch (err) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid JSON" }));
+      sendJSON(res, 201, { id: 1, name, email });
+    } catch {
+      sendJSON(res, 400, { error: "Invalid JSON" });
     }
+
+    // ── POST /calculate ──────────────────────────────────
   } else if (method === "POST" && url === "/calculate") {
     try {
-      const data = await parseBody(req);
-      const { a, b, operation } = data;
-
-      // Validate — thiếu field nào thì báo lỗi ngay
+      const { a, b, operation } = await parseBody(req);
       if (a === undefined || b === undefined || !operation) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "a, b and operation required" }));
-        return; // Dừng lại, không chạy tiếp
+        return sendJSON(res, 400, { error: "a, b and operation required" });
       }
-
-      // Đủ data → trả về user
-      let result = 0;
+      let result;
       switch (operation) {
         case "add":
           result = a + b;
@@ -79,25 +62,74 @@ const server = http.createServer(async (req, res) => {
           result = a * b;
           break;
         case "divide":
-          if (b === 0) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Cannot divide by zero" }));
-            return;
-          }
-          result = a / b; // Phải gán vào result
+          if (b === 0)
+            return sendJSON(res, 400, { error: "Cannot divide by zero" });
+          result = a / b;
           break;
-
         default:
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid operation" }));
-          return;
+          return sendJSON(res, 400, { error: "Invalid operation" });
       }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ result }));
-    } catch (err) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid JSON" }));
+      sendJSON(res, 200, { result });
+    } catch {
+      sendJSON(res, 400, { error: "Invalid JSON" });
     }
+
+    // ── GET /notes ───────────────────────────────────────
+  } else if (method === "GET" && url === "/notes") {
+    const notes = await readData();
+    sendJSON(res, 200, notes);
+
+    // ── POST /notes ──────────────────────────────────────
+  } else if (method === "POST" && url === "/notes") {
+    try {
+      const { title, content } = await parseBody(req);
+      if (!title || !content) {
+        return sendJSON(res, 400, { error: "title and content are required" });
+      }
+
+      const notes = await readData();
+
+      // Tạo ID: lấy ID lớn nhất hiện tại rồi +1, nếu chưa có note nào thì bắt đầu từ 1
+      const newId =
+        notes.length > 0 ? Math.max(...notes.map((n) => n.id)) + 1 : 1;
+
+      const newNote = {
+        id: newId,
+        title,
+        content,
+        createdAt: new Date().toISOString().split("T")[0],
+      };
+
+      notes.push(newNote);
+      await writeData(notes); // Lưu mảng đã cập nhật vào file
+
+      sendJSON(res, 201, newNote);
+    } catch {
+      sendJSON(res, 400, { error: "Invalid JSON" });
+    }
+
+    // ── DELETE /notes/:id ────────────────────────────────
+  } else if (method === "DELETE" && url.startsWith("/notes/")) {
+    // Tách ID ra từ URL: "/notes/3" → ["", "notes", "3"] → lấy phần tử cuối
+    const id = parseInt(url.split("/")[2]);
+
+    if (isNaN(id)) {
+      return sendJSON(res, 400, { error: "Invalid ID" });
+    }
+
+    const notes = await readData();
+    const index = notes.findIndex((n) => n.id === id); // Tìm vị trí note trong mảng
+
+    if (index === -1) {
+      return sendJSON(res, 404, { error: "Note not found" });
+    }
+
+    notes.splice(index, 1); // Xóa đúng 1 phần tử tại vị trí index
+    await writeData(notes); // Lưu lại mảng sau khi xóa
+
+    sendJSON(res, 200, { message: "deleted" });
+
+    // ── 404 fallback ─────────────────────────────────────
   } else {
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not Found");
