@@ -1,0 +1,4 @@
+[2026-04-21 09:05:55] note:created {"id":3,"title":"Third content","content":"Đây là Văn A","createdAt":"2026-04-21"}
+[2026-04-21 09:06:19] note:created {"id":4,"title":"Fourth content","content":"Đây là Thị B","createdAt":"2026-04-21"}
+[2026-04-21 09:10:54] note:deleted {"id":3,"title":"Third content"}
+[2026-04-21 09:23:19] note:created {"id":3,"title":"1","content":"Đây là Hồng Đạt","createdAt":"2026-04-21"}

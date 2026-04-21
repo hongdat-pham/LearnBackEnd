@@ -1,6 +1,7 @@
 import http from "http";
 import { parseBody, sendJSON } from "./utils.js";
 import { readData, writeData } from "./db.js";
+import logger from "./events/logger.js"; // thêm dòng này
 
 const server = http.createServer(async (req, res) => {
   const { method, url } = req;
@@ -84,6 +85,10 @@ const server = http.createServer(async (req, res) => {
     try {
       const { title, content } = await parseBody(req);
       if (!title || !content) {
+        logger.emit("server:error", {
+          message: "title and content are required",
+          url,
+        });
         return sendJSON(res, 400, { error: "title and content are required" });
       }
 
@@ -102,9 +107,11 @@ const server = http.createServer(async (req, res) => {
 
       notes.push(newNote);
       await writeData(notes); // Lưu mảng đã cập nhật vào file
+      logger.emit("note:created", newNote);
 
       sendJSON(res, 201, newNote);
-    } catch {
+    } catch (err) {
+      logger.emit("server:error", { message: err.message, url });
       sendJSON(res, 400, { error: "Invalid JSON" });
     }
 
@@ -123,9 +130,13 @@ const server = http.createServer(async (req, res) => {
     if (index === -1) {
       return sendJSON(res, 404, { error: "Note not found" });
     }
-
+    const deletedNote = notes[index]; // lưu note lại trước khi xóa
     notes.splice(index, 1); // Xóa đúng 1 phần tử tại vị trí index
     await writeData(notes); // Lưu lại mảng sau khi xóa
+    logger.emit("note:deleted", {
+      id: deletedNote.id,
+      title: deletedNote.title,
+    }); // ← thêm
 
     sendJSON(res, 200, { message: "deleted" });
 
