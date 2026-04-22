@@ -1,7 +1,12 @@
 import http from "http";
 import { parseBody, sendJSON } from "./utils.js";
 import { readData, writeData } from "./db.js";
-import logger from "./events/logger.js"; // thêm dòng này
+import logger from "./events/logger.js";
+import { createReadStream, createWriteStream, mkdirSync } from "fs";
+import readline from "readline";
+
+// Đảm bảo thư mục uploads/ tồn tại khi server khởi động
+mkdirSync("./uploads", { recursive: true });
 
 const server = http.createServer(async (req, res) => {
   const { method, url } = req;
@@ -75,6 +80,37 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, 400, { error: "Invalid JSON" });
     }
 
+    // ── GET /notes/export/csv ────────────────────────────
+    // ⚠️ Phải đặt TRƯỚC route /notes/export và DELETE /notes/:id
+  } else if (method === "GET" && url === "/notes/export/csv") {
+    const notes = await readData();
+    res.writeHead(200, {
+      "Content-Type": "text/csv",
+      "Content-Disposition": 'attachment; filename="notes.csv"',
+    });
+    res.write("id,title,content,createdAt\n");
+    for (const note of notes) {
+      const line = `${note.id},"${note.title}","${note.content}",${note.createdAt}\n`;
+      res.write(line);
+    }
+    res.end();
+
+    // ── GET /notes/export ────────────────────────────────
+    // ⚠️ Phải đặt TRƯỚC DELETE /notes/:id
+  } else if (method === "GET" && url === "/notes/export") {
+    const fileStream = createReadStream("./data/notes.json");
+
+    fileStream.on("error", () => {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No data file found" }));
+    });
+
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Disposition": 'attachment; filename="notes.json"',
+    });
+    fileStream.pipe(res);
+
     // ── GET /notes ───────────────────────────────────────
   } else if (method === "GET" && url === "/notes") {
     const notes = await readData();
@@ -106,7 +142,7 @@ const server = http.createServer(async (req, res) => {
       };
 
       notes.push(newNote);
-      await writeData(notes); // Lưu mảng đã cập nhật vào file
+      await writeData(notes);
       logger.emit("note:created", newNote);
 
       sendJSON(res, 201, newNote);
@@ -117,7 +153,6 @@ const server = http.createServer(async (req, res) => {
 
     // ── DELETE /notes/:id ────────────────────────────────
   } else if (method === "DELETE" && url.startsWith("/notes/")) {
-    // Tách ID ra từ URL: "/notes/3" → ["", "notes", "3"] → lấy phần tử cuối
     const id = parseInt(url.split("/")[2]);
 
     if (isNaN(id)) {
@@ -125,22 +160,69 @@ const server = http.createServer(async (req, res) => {
     }
 
     const notes = await readData();
-    const index = notes.findIndex((n) => n.id === id); // Tìm vị trí note trong mảng
+    const index = notes.findIndex((n) => n.id === id);
 
     if (index === -1) {
       return sendJSON(res, 404, { error: "Note not found" });
     }
-    const deletedNote = notes[index]; // lưu note lại trước khi xóa
-    notes.splice(index, 1); // Xóa đúng 1 phần tử tại vị trí index
-    await writeData(notes); // Lưu lại mảng sau khi xóa
+
+    const deletedNote = notes[index];
+    notes.splice(index, 1);
+    await writeData(notes);
     logger.emit("note:deleted", {
       id: deletedNote.id,
       title: deletedNote.title,
-    }); // ← thêm
+    });
 
     sendJSON(res, 200, { message: "deleted" });
 
-    // ── 404 fallback ─────────────────────────────────────
+    // ── POST /upload ─────────────────────────────────────
+  } else if (method === "POST" && url === "/upload") {
+    const filename = req.headers["x-filename"] || `upload_${Date.now()}.bin`;
+    const savePath = `./uploads/${filename}`;
+
+    const fileWriteStream = createWriteStream(savePath);
+
+    // Pipe request body thẳng vào file — không đọc vào RAM!
+    req.pipe(fileWriteStream);
+
+    fileWriteStream.on("finish", () => {
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Uploaded", filename }));
+    });
+
+    fileWriteStream.on("error", () => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Upload failed" }));
+    });
+
+    // ── GET /logs ─────────────────────────────────────────
+  } else if (method === "GET" && url === "/logs") {
+    const logPath = "./logs/events.log";
+    const fileStream = createReadStream(logPath);
+
+    // Xử lý lỗi — file chưa tồn tại (chưa có event nào)
+    fileStream.on("error", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "No logs yet" }));
+    });
+
+    // Tạo readline interface — đọc stream từng dòng một
+    const rl = readline.createInterface({ input: fileStream });
+
+    res.writeHead(200, { "Content-Type": "text/plain" });
+
+    let lineNumber = 0;
+    rl.on("line", (line) => {
+      lineNumber++;
+      res.write(`${lineNumber}: ${line}\n`); // Ghi từng dòng kèm số thứ tự
+    });
+
+    rl.on("close", () => {
+      res.end(); // Đóng response sau khi đọc hết file
+    });
+
+    // ── 404 ──────────────────────────────────────────────
   } else {
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not Found");
