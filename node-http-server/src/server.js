@@ -4,6 +4,7 @@ import { readData, writeData } from "./db.js";
 import logger from "./events/logger.js";
 import { createReadStream, createWriteStream, mkdirSync } from "fs";
 import readline from "readline";
+import { config } from "./config.js";
 
 // Đảm bảo thư mục uploads/ tồn tại khi server khởi động
 mkdirSync("./uploads", { recursive: true });
@@ -221,7 +222,16 @@ const server = http.createServer(async (req, res) => {
     rl.on("close", () => {
       res.end(); // Đóng response sau khi đọc hết file
     });
-
+  } else if (method === "GET" && url === "/config" && config.isDevelopment) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        port: config.port,
+        env: config.nodeEnv,
+        name: config.appName,
+        // ⚠️ KHÔNG bao giờ trả về secret, password, hay API key ở đây
+      }),
+    );
     // ── 404 ──────────────────────────────────────────────
   } else {
     res.writeHead(404, { "Content-Type": "text/plain" });
@@ -229,6 +239,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(3000, () => {
-  console.log("Server running at http://localhost:3000");
+server.listen(config.post, () => {
+  console.log(
+    `${config.appName} running on port ${config.post} (${config.nodeEnv})`,
+  );
 });
